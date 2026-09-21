@@ -1,0 +1,118 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'overclock_mt6768.c'
+      - 'Makefile'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'overclock_mt6768.c'
+      - 'Makefile'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+env:
+  GKI_MANIFEST_URL: https://android.googlesource.com/kernel/manifest
+  GKI_MANIFEST_BRANCH: common-android12-5.10-lts
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout overclock_mt6768
+        uses: actions/checkout@v4
+        with:
+          path: overclock_mt6768
+
+      - name: Install repo tool
+        run: |
+          curl -sSL https://storage.googleapis.com/git-repo-downloads/repo > /tmp/repo
+          chmod +x /tmp/repo
+          sudo mv /tmp/repo /usr/local/bin/repo
+
+      - name: Sync GKI common kernel
+        run: |
+          mkdir -p ~/OSS && cd ~/OSS
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          repo init --no-repo-verify \
+            -u "$GKI_MANIFEST_URL" -b "$GKI_MANIFEST_BRANCH" \
+            --repo-rev=main --depth=1
+          repo sync -j"$(nproc)" --no-tags --no-clone-bundle --current-branch -f
+
+      - name: Find the plain GKI build config
+        id: bconfig
+        run: |
+          cd ~/OSS/common
+          # The plain (non-vendor) GKI aarch64 config name has varied slightly
+          # across branches historically (e.g. build.config.gki.aarch64).
+          # List what this branch actually ships so a failure here is loud
+          # and obvious instead of silently building the wrong target.
+          ls build.config*
+          CANDIDATE=$(ls build.config.gki.aarch64 2>/dev/null || ls build.config.gki_kernel.aarch64 2>/dev/null || true)
+          if [ -z "$CANDIDATE" ]; then
+            echo "::error::Could not find a plain GKI aarch64 build.config in common/. See the build.config* listing above and update this workflow with the correct filename."
+            exit 1
+          fi
+          echo "config=$CANDIDATE" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare kernel tree (modules_prepare, no vmlinux/LTO build)
+        run: |
+          cd ~/OSS/common
+          CLANG_PREBUILT_BIN=$(grep -E '^CLANG_PREBUILT_BIN=' build.config.common | cut -d= -f2)
+          echo "Resolved CLANG_PREBUILT_BIN: '$CLANG_PREBUILT_BIN'"
+          if [ -z "$CLANG_PREBUILT_BIN" ] || [ ! -d "$HOME/OSS/$CLANG_PREBUILT_BIN" ]; then
+            echo "::error::CLANG_PREBUILT_BIN not found in build.config.common, or the resolved directory doesn't exist."
+            echo "build.config.common contents (Clang-related lines):"
+            grep -i clang build.config.common || true
+            echo "Actual prebuilt clang dirs on disk:"
+            find "$HOME/OSS/prebuilts-master/clang" -maxdepth 3 -type d 2>/dev/null || find "$HOME/OSS" -maxdepth 4 -iname "clang-r*" 2>/dev/null || true
+            exit 1
+          fi
+          export PATH="$HOME/OSS/$CLANG_PREBUILT_BIN:$PATH"
+          echo "Using clang: $(which clang)"
+          clang --version
+          MAKE_TOOLCHAIN_ARGS="ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1"
+          # gki_defconfig is the standard GKI aarch64 defconfig target name.
+          # If this branch names it differently, list what's available so the
+          # failure is loud and obvious instead of silently building nothing.
+          # No O=out: our own Makefile expects KDIR itself to be the built
+          # tree (.config, Module.symvers, include/generated all in-tree).
+          if ! make $MAKE_TOOLCHAIN_ARGS gki_defconfig; then
+            echo "::error::gki_defconfig target not found. Available configs:"
+            ls arch/arm64/configs/
+            exit 1
+          fi
+          make $MAKE_TOOLCHAIN_ARGS -j"$(nproc)" modules_prepare
+
+      - name: check-clang
+        working-directory: overclock_mt6768
+        run: make check-clang WORKSPACE="$HOME/OSS" KDIR="$HOME/OSS/common"
+
+      - name: Build module
+        working-directory: overclock_mt6768
+        run: make WORKSPACE="$HOME/OSS" KDIR="$HOME/OSS/common"
+
+      - name: Verify output
+        working-directory: overclock_mt6768
+        run: |
+          test -f overclock_mt6768.ko
+          ls -lh overclock_mt6768.ko
+          strings overclock_mt6768.ko | grep '^vermagic='
+          echo ""
+          echo "NOTE: this built against the generic GKI manifest branch"
+          echo "($GKI_MANIFEST_BRANCH), not moon's own kernel tree. Before"
+          echo "insmod-ing this on a real device, compare the vermagic above"
+          echo "against \`cat /proc/version\` on that moon device — if the"
+          echo "release string differs, this .ko was not built with the same"
+          echo "kernel/toolchain that's actually running, and loading it is a"
+          echo "known way to get a silent CFI-fault reboot."
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: overclock_mt6768.ko
+          path: overclock_mt6768/overclock_mt6768.ko

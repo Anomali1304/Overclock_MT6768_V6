@@ -1,0 +1,21 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 2, June 1991
+
+ Copyright (C) 1989, 1991 Free Software Foundation, Inc.
+ 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+This project builds and packages Linux kernel sources and out-of-tree
+kernel modules, which are themselves licensed GPL-2.0. The build
+scripts, stage definitions, and CI configuration in this repository
+are likewise distributed under the terms of the GNU General Public
+License, version 2, as published by the Free Software Foundation.
+
+The full license text is available at:
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+Individual components (the kernel source pulled by stages/10-download.sh,
+KernelSU / KernelSU-Next / ReSukiSU, SUSFS, vendor MediaTek modules)
+retain their own upstream licenses — see each project's own repository
+for details.
