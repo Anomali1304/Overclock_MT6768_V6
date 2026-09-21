@@ -76,6 +76,16 @@ cat $P/gpu_oc_result
 
 Writing `0` to both CPU target-frequency nodes and applying restores the stock CPU top entries. Writing `0` to `gpu_target_khz` restores the stock GPU table.
 
+## Software caps
+
+| Cap | Default | Override |
+| --- | --- | --- |
+| GPU max freq (`POSDIV_2_MAX_FREQ`) | 1300000 KHz | `make OC_DEFS="-DPOSDIV_2_MAX_FREQ=1400000U"` |
+| CPU max over stock idx0 (`MAX_OC_PERCENT_OVER_STOCK`) | 20 % | `make OC_DEFS="-DMAX_OC_PERCENT_OVER_STOCK=25"` |
+| VGPU max (`VGPU_MAX_VOLT`) | 95000 (VSRAM 105000 from `gpufreq_mt6768.h`) | not overridable |
+
+These are guards, not stability guarantees.
+
 ## Important
 
 This repository is source code, not a claim that every possible frequency/voltage combination is hardware-safe. Use the already-tested Moon limits and increase targets in small steps. CPU frequency and GPU frequency/voltage must be validated on the actual device.

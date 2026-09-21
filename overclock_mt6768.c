@@ -141,10 +141,11 @@ static void __iomem *g_apmixed_va;
  * GPU OPP table: 32 levels, from 299000 KHz up to a STOCK MAX of
  * 1000000 KHz @ ~87500 (mV*100) / vsram 97500. The old MT6789 ceiling
  * (1750000) was 75% above that stock max — reckless for a smaller/weaker
- * MT6768 GPU. Set to a conservative +15% over stock as a STARTING ceiling,
- * not a proven-safe number. Raise only in small steps, after each step is
- * confirmed stable on real hardware — do not jump straight to this value
- * either.
+ * MT6768 GPU. The ceiling is now +30% over stock (1300000 KHz). It is only
+ * a software guard, NOT a proven-safe number: raise the target in small
+ * steps, after each step is confirmed stable on real hardware — do not jump
+ * straight to the ceiling. Override at build time with
+ * `make OC_DEFS="-DPOSDIV_2_MAX_FREQ=1400000U"` if you need more.
  *
  * IMPORTANT: this constant is only exercised on the WRITE path
  * (gpu_oc_apply, via write_pll_con1_safe/freq_to_posdiv_gpu). The
@@ -154,7 +155,9 @@ static void __iomem *g_apmixed_va;
  * still needs its own first real test, starting at/near stock frequency,
  * not at this ceiling.
  */
-#define POSDIV_2_MAX_FREQ  1150000U
+#ifndef POSDIV_2_MAX_FREQ
+#define POSDIV_2_MAX_FREQ  1300000U
+#endif
 #define POSDIV_4_MIN_FREQ  375000U
 #define VGPU_MAX_VOLT      95000U   /* VSRAM_MAX_VOLT 105000 - 10000 diff (gpufreq_mt6768.h) */
 #define VGPU_MIN_VOLT      50000U
@@ -176,7 +179,7 @@ static char gpu_oc_result[128] = "not applied";
 static char gpu_opp_table[4096] = "";
 
 module_param(gpu_target_khz,  uint, 0644);
-MODULE_PARM_DESC(gpu_target_khz,  "GPU target freq KHz (0=off, max 1150000 in this port; stock max on moon is 1000000)");
+MODULE_PARM_DESC(gpu_target_khz,  "GPU target freq KHz (0=off, max 1300000 in this port; stock max on moon is 1000000)");
 module_param(gpu_target_volt,  uint, 0644);
 MODULE_PARM_DESC(gpu_target_volt,  "GPU target volt mV*100 (e.g. 90000=900mV, max 95000)");
 module_param_string(gpu_oc_result, gpu_oc_result, sizeof(gpu_oc_result), 0444);
@@ -640,7 +643,9 @@ MODULE_PARM_DESC(cpu_b_first_cpu, "First CPU# in the big cluster (informational,
  * apply time against each cluster's own current value. See
  * MAX_OC_PERCENT_OVER_STOCK below.
  */
-#define MAX_OC_PERCENT_OVER_STOCK  10
+#ifndef MAX_OC_PERCENT_OVER_STOCK
+#define MAX_OC_PERCENT_OVER_STOCK  20
+#endif
 
 /*
  * WHY NOT kallsyms_lookup_name("cpu_dvfs"):
@@ -680,8 +685,8 @@ static unsigned int cpu_b_target_khz  = 0;
 static int          cpu_oc_apply       = 0;
 module_param(cpu_ll_target_khz, uint, 0644);
 module_param(cpu_b_target_khz,  uint, 0644);
-MODULE_PARM_DESC(cpu_ll_target_khz, "Little cluster idx0 target KHz, multiple of 1000, stock..+10%; 0 restores stock");
-MODULE_PARM_DESC(cpu_b_target_khz,  "Big cluster idx0 target KHz, multiple of 1000, stock..+10%; 0 restores stock");
+MODULE_PARM_DESC(cpu_ll_target_khz, "Little cluster idx0 target KHz, multiple of 1000, stock..+20%; 0 restores stock");
+MODULE_PARM_DESC(cpu_b_target_khz,  "Big cluster idx0 target KHz, multiple of 1000, stock..+20%; 0 restores stock");
 
 /* Saved stock top-index values so exit() can put them back. */
 /* Stock CSRAM idx0 word per cluster (0=little, 1=big), saved before the first write. */

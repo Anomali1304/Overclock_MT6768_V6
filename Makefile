@@ -20,7 +20,11 @@ CLANG_TRIPLE  := aarch64-linux-gnu-
 CROSS_COMPILE := aarch64-linux-gnu-
 LLVM          := 1
 
+# Optional cap overrides, e.g. make OC_DEFS="-DPOSDIV_2_MAX_FREQ=1400000U -DMAX_OC_PERCENT_OVER_STOCK=25"
+OC_DEFS       ?=
+
 EXTRA_CFLAGS  := \
+  $(OC_DEFS) \
   --target=aarch64-linux-gnu \
   -fno-sanitize=shadow-call-stack \
   -Wno-unused-variable \
