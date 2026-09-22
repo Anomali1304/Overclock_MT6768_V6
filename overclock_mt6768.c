@@ -198,10 +198,9 @@ static struct workqueue_struct *g_oc_wq;
 static struct delayed_work      g_gpu_pll_work;
 
 /* Guard-thread state, used by both the CSRAM OC ceiling guard and the plain
- * min/max guard below (cpu_bound_khz_set / cpu_guard_fn) — declared here,
- * ahead of both, since C needs the storage to exist before either uses it.
- * module_param()/MODULE_PARM_DESC for these stay next to cpu_guard_fn()
- * further down, where the full behavior is documented.
+ * ahead of cpu_guard_fn() below, since C needs the storage to exist before
+ * it's used. module_param()/MODULE_PARM_DESC for these stay next to
+ * cpu_guard_fn() further down, where the full behavior is documented.
  */
 static unsigned int cpu_guard_ms = 200;
 static unsigned int cpu_guard_hits;
@@ -639,117 +638,6 @@ static unsigned int cpu_b_first_cpu  = 6;
 module_param(cpu_ll_first_cpu, uint, 0444);
 module_param(cpu_b_first_cpu, uint, 0444);
 
-/*
- * Plain min/max frequency (the dropdown in the WebUI, NOT the CSRAM OC
- * ceiling above). Root cause of "always rejected, value never changes":
- * the same on-device behaviour documented at cpu_guard_fn() below also
- * resets a plain scaling_min_freq/scaling_max_freq QoS request back to
- * stock within a few seconds of any userspace write — not just the OC
- * ceiling. A bare `echo X > scaling_max_freq` looks like it worked (the
- * store() call returns success) and then silently reverts, which is
- * exactly "rejected" from the WebUI's read-back check.
- *
- * Fix: don't rely on the value sticking after one write. Keep the
- * requested value here and have cpu_guard_fn() re-assert it via
- * freq_qos_update_request() on the SAME pol->min_freq_req/max_freq_req
- * the cpufreq core already maintains for scaling_min/max_freq — this is
- * the identical mechanism already proven to hold the OC ceiling, just
- * generalized to any user-requested bound, not only the OC one.
- * 0 = unmanaged (leave whatever the core/governor currently has).
- */
-static unsigned int g_ll_user_min_khz, g_ll_user_max_khz;
-static unsigned int g_b_user_min_khz,  g_b_user_max_khz;
-
-static int cpu_bound_khz_set(unsigned int rep_cpu, unsigned int *requested,
-			      bool is_max, const char *val)
-{
-	struct cpufreq_policy *pol;
-	unsigned int khz;
-	struct freq_qos_request *req;
-
-	if (kstrtouint(val, 10, &khz))
-		return -EINVAL;
-
-	pol = cpufreq_cpu_get(rep_cpu);
-	if (!pol)
-		return -ENODEV;
-
-	if (khz) {
-		if (khz < pol->cpuinfo.min_freq)
-			khz = pol->cpuinfo.min_freq;
-		if (khz > pol->cpuinfo.max_freq)
-			khz = pol->cpuinfo.max_freq;
-	}
-
-	mutex_lock(&oc_lock);
-	*requested = khz;
-	req = is_max ? pol->max_freq_req : pol->min_freq_req;
-	if (khz && req)
-		freq_qos_update_request(req, khz);
-	mutex_unlock(&oc_lock);
-
-	if (khz && g_oc_wq && cpu_guard_ms && !g_guard_stop)
-		mod_delayed_work(g_oc_wq, &g_cpu_guard_work, msecs_to_jiffies(cpu_guard_ms));
-
-	cpufreq_cpu_put(pol);
-	return 0;
-}
-
-static int cpu_bound_khz_get(unsigned int rep_cpu, unsigned int requested,
-			      bool is_max, char *buf)
-{
-	struct cpufreq_policy *pol;
-	unsigned int value = requested;
-
-	if (!value) {
-		pol = cpufreq_cpu_get(rep_cpu);
-		if (pol) {
-			value = is_max ? pol->max : pol->min;
-			cpufreq_cpu_put(pol);
-		}
-	}
-	return scnprintf(buf, PAGE_SIZE, "%u\n", value);
-}
-
-static int cpu_ll_min_khz_set(const char *val, const struct kernel_param *kp)
-{ return cpu_bound_khz_set(cpu_ll_first_cpu, &g_ll_user_min_khz, false, val); }
-static int cpu_ll_min_khz_get(char *buf, const struct kernel_param *kp)
-{ return cpu_bound_khz_get(cpu_ll_first_cpu, g_ll_user_min_khz, false, buf); }
-static const struct kernel_param_ops cpu_ll_min_khz_ops = {
-	.set = cpu_ll_min_khz_set, .get = cpu_ll_min_khz_get,
-};
-module_param_cb(cpu_ll_min_khz, &cpu_ll_min_khz_ops, NULL, 0644);
-MODULE_PARM_DESC(cpu_ll_min_khz, "Requested little-cluster minimum KHz; persisted and guarded against being reset to stock (0 = unmanaged)");
-
-static int cpu_ll_max_khz_set(const char *val, const struct kernel_param *kp)
-{ return cpu_bound_khz_set(cpu_ll_first_cpu, &g_ll_user_max_khz, true, val); }
-static int cpu_ll_max_khz_get(char *buf, const struct kernel_param *kp)
-{ return cpu_bound_khz_get(cpu_ll_first_cpu, g_ll_user_max_khz, true, buf); }
-static const struct kernel_param_ops cpu_ll_max_khz_ops = {
-	.set = cpu_ll_max_khz_set, .get = cpu_ll_max_khz_get,
-};
-module_param_cb(cpu_ll_max_khz, &cpu_ll_max_khz_ops, NULL, 0644);
-MODULE_PARM_DESC(cpu_ll_max_khz, "Requested little-cluster maximum KHz (within stock/OC ceiling); persisted and guarded against being reset to stock (0 = unmanaged)");
-
-static int cpu_b_min_khz_set(const char *val, const struct kernel_param *kp)
-{ return cpu_bound_khz_set(cpu_b_first_cpu, &g_b_user_min_khz, false, val); }
-static int cpu_b_min_khz_get(char *buf, const struct kernel_param *kp)
-{ return cpu_bound_khz_get(cpu_b_first_cpu, g_b_user_min_khz, false, buf); }
-static const struct kernel_param_ops cpu_b_min_khz_ops = {
-	.set = cpu_b_min_khz_set, .get = cpu_b_min_khz_get,
-};
-module_param_cb(cpu_b_min_khz, &cpu_b_min_khz_ops, NULL, 0644);
-MODULE_PARM_DESC(cpu_b_min_khz, "Requested big-cluster minimum KHz; persisted and guarded against being reset to stock (0 = unmanaged)");
-
-static int cpu_b_max_khz_set(const char *val, const struct kernel_param *kp)
-{ return cpu_bound_khz_set(cpu_b_first_cpu, &g_b_user_max_khz, true, val); }
-static int cpu_b_max_khz_get(char *buf, const struct kernel_param *kp)
-{ return cpu_bound_khz_get(cpu_b_first_cpu, g_b_user_max_khz, true, buf); }
-static const struct kernel_param_ops cpu_b_max_khz_ops = {
-	.set = cpu_b_max_khz_set, .get = cpu_b_max_khz_get,
-};
-module_param_cb(cpu_b_max_khz, &cpu_b_max_khz_ops, NULL, 0644);
-MODULE_PARM_DESC(cpu_b_max_khz, "Requested big-cluster maximum KHz (within stock/OC ceiling); persisted and guarded against being reset to stock (0 = unmanaged)");
 MODULE_PARM_DESC(cpu_ll_first_cpu, "First CPU# in the little cluster (informational, from moon's cpu-map)");
 MODULE_PARM_DESC(cpu_b_first_cpu, "First CPU# in the big cluster (informational, from moon's cpu-map)");
 
@@ -1402,48 +1290,22 @@ static __nocfi void cpu_guard_fn(struct work_struct *work)
 		struct mt_cpu_dvfs_mirror *c;
 		struct cpufreq_policy *pol;
 		unsigned int oc, stock;
-		unsigned int user_min = (cid == 0) ? g_ll_user_min_khz : g_b_user_min_khz;
-		unsigned int user_max = (cid == 0) ? g_ll_user_max_khz : g_b_user_max_khz;
 
-		c = cluster_get(cid);
-		pol = c ? cpufreq_cpu_get(c->cpu_id) : NULL;
-
-		/* Plain user min/max (the WebUI dropdown): re-assert whenever
-		 * it has drifted from what was requested, independent of
-		 * whether CSRAM OC is active on this cluster.
-		 */
-		if (pol && user_min && pol->min_freq_req &&
-		    pol->min_freq_req->pnode.prio != (int)user_min) {
-			freq_qos_update_request(pol->min_freq_req, user_min);
-			cpu_guard_hits++;
-		}
-		if (pol && user_max && pol->max_freq_req &&
-		    pol->max_freq_req->pnode.prio != (int)user_max) {
-			freq_qos_update_request(pol->max_freq_req, user_max);
-			cpu_guard_hits++;
-		}
-
-		if (!g_have_w0[cid] || !c || !c->opp_tbl) {
-			if (pol)
-				cpufreq_cpu_put(pol);
+		if (!g_have_w0[cid])
 			continue;
-		}
+		c = cluster_get(cid);
+		if (!c || !c->opp_tbl)
+			continue;
 		oc = c->opp_tbl[0].cpufreq_khz;
 		stock = (g_orig_w0[cid] & 0xFFFF) * 1000U;
-		if (oc <= stock) {	/* not overclocked (restored) */
-			if (pol)
-				cpufreq_cpu_put(pol);
+		if (oc <= stock)	/* not overclocked (restored) */
 			continue;
-		}
 		active++;
 
+		pol = cpufreq_cpu_get(c->cpu_id);
 		if (!pol)
 			continue;
-		/* Do not fight a user_max that is deliberately below the OC
-		 * ceiling (e.g. capping for battery) — only re-raise when the
-		 * request has been reset to exactly the stock value.
-		 */
-		if (!user_max && pol->max_freq_req &&
+		if (pol->max_freq_req &&
 		    pol->max_freq_req->pnode.prio == (int)stock) {
 			freq_qos_update_request(pol->max_freq_req, oc);
 			cpu_guard_hits++;
@@ -1451,9 +1313,8 @@ static __nocfi void cpu_guard_fn(struct work_struct *work)
 		cpufreq_cpu_put(pol);
 	}
 	mutex_unlock(&oc_lock);
-	if (!active && !g_ll_user_min_khz && !g_ll_user_max_khz &&
-	    !g_b_user_min_khz && !g_b_user_max_khz)
-		return;		/* nothing to guard: stay idle until next request */
+	if (!active)
+		return;		/* nothing overclocked: stay idle until next apply */
 rearm:
 	if (!g_guard_stop && cpu_guard_ms && g_oc_wq)
 		queue_delayed_work(g_oc_wq, &g_cpu_guard_work,
